@@ -45,3 +45,22 @@ Not for deployment — Dokploy builds your image on the server. You may want Doc
 6. **Connect to internal Supabase (optional).** If your app uses self-hosted Supabase, set `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY` from the Supabase guide.
 
 ✅ **You're done when:** Your app is reachable at the assigned domain and returns responses (HTTP 200, not 502 or 5xx).
+
+---
+
+## Troubleshooting
+
+**Build fails with "no Dockerfile found" or "no build pack matched"**
+Dokploy didn't detect your `Dockerfile` or a Nixpacks-compatible project. Make sure a `Dockerfile` exists at the repo root, or that your project has a recognized entrypoint (`package.json`, `requirements.txt`, `go.mod`, etc.) so Nixpacks can pick it up.
+
+**App builds but crashes on startup**
+Almost always a missing or wrong environment variable. Check the Logs tab — the runtime error will print there. Compare what your app reads (anything in code that touches `process.env` or `os.environ`) against what you set in the service's Environment tab.
+
+**Domain returns `502 Bad Gateway`**
+Your app isn't listening on the port Dokploy is forwarding to. Defaults are `3000` for Node/Next.js and `8000` for Python apps. Check the `EXPOSE` line in your `Dockerfile` and your app's actual listen port — they must match the port set in Dokploy's General tab.
+
+**SSL certificate fails to provision**
+DNS hasn't propagated yet, or the domain doesn't resolve to Dokploy's IP. Wait 5–10 minutes after adding the domain. If it still fails, ask the infra team to verify the DNS record.
+
+**Can't log into Dokploy**
+You're not on the Anduin network. Connect to VPN and retry. If you still can't reach the URL, ask in `#vibecoding` on Slack.
