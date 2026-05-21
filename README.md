@@ -9,6 +9,7 @@ Onboarding guides for Hivemind learners. Each guide takes one task end-to-end �
 | 1 | [LiteLLM API key](litellm-api-key.md) | Get a shared LiteLLM key from 1Password and make your first call against `litellm.anduin.center` | ✅ Available |
 | 2 | [Dokploy deployment](dokploy-deployment.md) | Deploy an app to a Dokploy instance — Dockerfile to live URL | ✅ Available |
 | 3 | [Self-hosted Supabase ↗](https://github.com/AI-Hivemind-Lab/selfhosted-supabase) | Spin up a Supabase stack on Dokploy | ✅ Available (separate repo) |
+| 4 | [Self-hosted Qdrant ↗](https://github.com/AI-Hivemind-Lab/selfhosted-qdrant) | Spin up a Qdrant vector database on Dokploy | ✅ Available (separate repo) |
 
 ## Who this is for
 
