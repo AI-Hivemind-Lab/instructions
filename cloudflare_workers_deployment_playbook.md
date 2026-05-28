@@ -17,7 +17,7 @@ Most modern web apps fit these constraints naturally — especially apps where a
 
 - **Each request finishes in a few seconds.** "Call an API, wait, return the result" is the sweet spot.
 - **Files are read by an AI API, not your code.** Shuttling a PDF to Claude or OpenAI for parsing is fine; parsing it yourself is not.
-- **The database is reached over HTTPS** (Supabase REST API, Supabase Edge Functions, Firebase). You don't connect directly to Postgres or MySQL — even if your database is hosted on Supabase, using pg / prisma / drizzle with a postgresql:// connection string will fail on Workers.
+- **The database is reached over HTTPS** (Supabase REST API, Supabase Edge Functions, Firebase). You don't connect directly to Postgres or MySQL. Even if your database is hosted on Supabase, code that uses `pg` / `prisma` / `drizzle` with a `postgresql://` connection string will fail on Workers.
 - **It's a frontend plus a thin API proxy layer.**
 - **Dependencies are Workers-compatible.** No Node-only libraries in `package.json` (see constraint #2).
 - **It's an Anduin internal app.** Anduin's Cloudflare Zero Trust gate covers `*.fin.anduin.center` and similar subdomains, so your app sits behind company SSO for free.
