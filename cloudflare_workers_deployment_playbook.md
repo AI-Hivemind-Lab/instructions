@@ -22,19 +22,19 @@ Most modern web apps fit these constraints naturally — especially apps where a
 - **Dependencies are Workers-compatible.** No Node-only libraries in `package.json` (see constraint #2).
 - **It's an Anduin internal app.** Anduin's Cloudflare Zero Trust gate covers wildcards on assigned root domains, so your app sits behind company SSO for free.
 
-### Your app does NOT fit Workers if:
+### Your app does NOT fit Cloudflare Workers if:
 
 - **Your code parses large files itself** (PDFs, slides, Excel, video).
 - **It runs background jobs lasting minutes** (batch processing, ETL, model training).
 - **It needs persistent connections** (websockets, long-lived SSE).
 
-If any of these describe your app, **Workers is the wrong platform.** Use **Dokploy** for heavy backends or **Vercel** for public-facing Next.js apps. The rest of this document doesn't apply.
+If any of these describe your app, **Cloudflare Workers is the wrong platform.** Use **Dokploy** for heavy backends or **Vercel** for public-facing Next.js apps. The rest of this document doesn't apply.
 
 ---
 ## 2. How to Deploy to Cloudflare Workers
 
 > [!IMPORTANT]
-> There are 3 main ways to deploy a Worker to Cloudflare:
+> There are 3 main ways to deploy to Cloudflare Workers:
 > 
 > 1. **Wrangler CLI** — run `wrangler deploy` from your terminal. The original and most flexible method. Requires Node.js + project setup. AI can drive this end-to-end.
 > 2. **Cloudflare Dashboard** — edit code directly in the Cloudflare web UI and click Deploy. Good for tiny one-file Workers and quick edits. Not practical for real apps with frameworks (Next.js, etc.) or dependencies.
@@ -243,5 +243,50 @@ If anything fails in `cf:preview`, it will fail in production too. Fix it now, b
 > **The `*.workers.dev` URLs bypass your Zero Trust gate.** Cloudflare auto-creates two default URLs for every Worker on `*.workers.dev` — the Worker URL and Preview URLs. These are **not** behind Anduin Zero Trust — anyone on the Internet who discovers the URL can reach your app and any data it exposes, bypassing company SSO entirely.
 >
 > AI usually disables these as part of the deploy flow, but it may do so silently without telling you. **Always check the dashboard yourself after every deploy.** The custom domain you set up via `wrangler.jsonc` is the only URL that should remain active for internal apps.
+
+---
+
+### 2.3 Wire External Services
+
+After Checkpoint 6, the app is deployed but external services still point at development URLs (or aren't configured at all for production). Three things commonly need wiring after every deploy:
+
+#### 1. OAuth provider (Google, Microsoft, Auth0, etc.)
+
+Add your production URL to the **Authorized redirect URIs** in the OAuth provider console. For Google OAuth, the callback URL typically looks like `https://your-app.your-assigned-root.com/api/auth/callback/google`. AI cannot do this step — provider consoles require manual UI clicks that AI can't see.
+
+Until this is added, sign-in will fail with a redirect URI mismatch error.
+
+#### 2. Database CORS / allowed origins
+
+If your app calls Supabase Edge Functions, Firebase, or any database service with CORS protection, add your production URL to the allowed origins. For Supabase Edge Functions, ask AI to run:
+
+```bash
+supabase secrets set ALLOWED_ORIGIN=https://your-app.your-assigned-root.com
+```
+
+Without this, your app loads but every API call from the browser gets blocked by CORS and returns a network error.
+
+#### 3. Webhooks and third-party callbacks
+
+If your app receives webhooks (Stripe, GitHub, Slack, etc.) or sends callbacks to third-party services, update those services with your production URL. Each provider has its own console — AI cannot touch them. Make a list of every external service you wired during development and update each one.
+
+> [!TIP]
+> After wiring, sanity-check by signing in and clicking through the main flows in your browser. If anything fails, ask AI to run `wrangler tail` — this streams live logs from your Worker so you can see exactly what's happening on each request. Most post-deploy failures show up here within seconds.
+
+---
+
+## 3. Security Non-Negotiables
+
+These rules apply regardless of what AI suggests, what the docs say, or how convenient a shortcut feels. Breaking any of them creates a real exposure that's expensive to clean up.
+
+1. **Never paste secrets into AI chat.** Chat history is considered a compromise vector — even private chats, even "just to debug." Any secret that touches chat must be rotated.
+
+2. **Never bypass the Zero Trust gate for convenience.** Not "just for 5 minutes of testing," not "only on my laptop." The gate is the only thing between your app and the public Internet. If you genuinely need an exception, contact InfoSec — don't disable it yourself.
+
+3. **Never deploy a company app to a personal Cloudflare account.** Even if it technically works. Personal accounts mean the app leaves when you leave the company, admins can't monitor or take over, and billing ends up on personal cards.
+
+4. **Always verify `*.workers.dev` URLs are disabled after every deploy.** AI usually handles this, but silently. Open the Cloudflare dashboard → your Worker → Settings, and confirm both Worker URL and Preview URLs show `Inactive`. Until they are, your app is reachable from the public Internet bypassing the Zero Trust gate.
+
+5. **Sync secrets across all platforms when rotating.** If you rotate `SUPABASE_ANON_KEY` in Supabase but forget to update it in the Worker, the app breaks. If you rotate it in the Worker but forget Supabase, the old key still works elsewhere and isn't actually rotated. Rotation must happen everywhere the secret lives, in the same change.
 
 ---
