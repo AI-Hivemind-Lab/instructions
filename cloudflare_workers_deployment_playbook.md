@@ -1,6 +1,5 @@
 # Cloudflare Workers Deployment Playbook
 
-*Audience: back-office teammates shipping AI-built apps to production.*
 *Last updated: 2026-05-28*
 
 ---
