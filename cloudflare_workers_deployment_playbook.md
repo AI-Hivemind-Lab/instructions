@@ -65,7 +65,7 @@ If any of these describe your app, **Workers is the wrong platform.** Use **Dokp
 
 4. **Secrets in `.env.local`.** Make sure every API key, OAuth ID, and database credential your app needs is in `.env.local` before you start. AI can then run secret commands that pipe values from the file straight to Cloudflare — without ever seeing the values themselves. **Never paste secrets directly into the AI chat** — once they're in chat history, they're considered compromised and must be rotated.
 
-Also ask AI to audit `package.json` for Node-only libraries before starting (see Section 1, constraint #2). If any are found, fix them before deploying — the build will fail otherwise.
+5. **Make sure your app is not using Node-only libraries** Ask AI to audit `package.json` for Node-only libraries before starting (see Section 1, constraint #2). If any are found, fix them before deploying — the build will fail otherwise.
 
 > [!NOTE]
 > **Cloudflare One Client**
