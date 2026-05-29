@@ -42,7 +42,7 @@ If any of these describe your app, **Cloudflare Workers is the wrong platform.**
 > 
 > **This document covers the Wrangler CLI path** because it's the only one where AI can do the full deploy unassisted — install packages, write config, run commands, set secrets, all from the terminal. The Dashboard path requires manual clicking through UI screens that AI can't see, and Workers Builds is best added later as automation on top of a working Wrangler setup.
 
-### 2.1 Before You Start — Get These 4 Things Ready
+### 2.1 Before You Start — Get These 5 Things Ready
 
 1. **Of course, code in a GitHub repo.** Private, under the Anduin org if internal.
 
@@ -84,6 +84,9 @@ If any of these describe your app, **Cloudflare Workers is the wrong platform.**
 ### 2.2 The Deploy Itself — 6 Checkpoints
 
 AI will run the commands. Your job is to review the output at each checkpoint and confirm it's correct before AI moves on.
+
+> [!NOTE]
+> The companion AI instruction file groups the work into "pre-flight checks" plus "Steps 1–6," which don't line up 1:1 with the checkpoint numbers below. The AI file carries a mapping table and should announce the checkpoint name as it goes, but if it says "Step 4" while you're expecting "Checkpoint 5," that's the dry-run either way — no cause for alarm.
 
 **Overview:**
 
@@ -132,35 +135,51 @@ AI will run the commands. Your job is to review the output at each checkpoint an
 **What AI does:** Creates `wrangler.jsonc` in the project root with these required fields:
 - `name` (your Worker name)
 - `main` (entry point — typically `.open-next/worker.js`)
-- `compatibility_date` (pins Workers runtime behavior to a specific date for consistency)
+- `compatibility_date` (pins Workers runtime behavior to a specific date — must be `2024-09-23` or later)
+- `compatibility_flags` (**required** — `["nodejs_compat", "global_fetch_strictly_public"]`; without `nodejs_compat` the Worker crashes at runtime)
 - `account_id`
+- `assets` (**required** — points at `.open-next/assets` so static files get served; without it the app loads blank)
+- `workers_dev: false` and `preview_urls: false` (disable the public `*.workers.dev` URLs — see Checkpoint 6 and Security #4)
 - `routes` (with `custom_domain: true` for your chosen subdomain)
-- `vars` (non-sensitive config only)
+- `vars` (non-sensitive, **server-side** config only)
+- `observability: { enabled: true }` (turns on logs/metrics from day one)
 
 ```jsonc
 //Example skeleton//
    {
+     "$schema": "node_modules/wrangler/config-schema.json",
      "name": "your-app",
      "main": ".open-next/worker.js",
      "compatibility_date": "2026-05-28",
+     "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
      "account_id": "<from wrangler whoami>",
+     "assets": { "directory": ".open-next/assets", "binding": "ASSETS" },
+     "workers_dev": false,
+     "preview_urls": false,
      "routes": [
        { "pattern": "your-app.your-root.com", "custom_domain": true }
      ],
      "vars": {
-       "NEXT_PUBLIC_APP_URL": "https://your-app.your-root.com"
-     }
+       // server-side, non-secret config only — the actual keys depend on YOUR app
+       "APP_BASE_URL": "https://your-app.your-root.com"
+     },
+     "observability": { "enabled": true }
    }
 ```
 
 **What you verify:**
+- `compatibility_flags` includes `nodejs_compat` — this is what lets the OpenNext adapter run; missing it = runtime crash
+- `assets` block is present and points at `.open-next/assets` — missing it = blank app (no CSS/JS)
 - `account_id` matches the account shown by `wrangler whoami` from Checkpoint 1
 - `routes[].pattern` is your intended subdomain (e.g. `your-app.your-assigned-root.com`), not the root domain and not `*.workers.dev`
 - `custom_domain: true` is set on the route — this is what auto-provisions DNS
-- `vars` contains only non-sensitive config (feature flags, public URLs)
+- `workers_dev` and `preview_urls` are both `false`
+- `vars` contains only non-sensitive, **server-side** config (feature flags, server URLs like `NEXTAUTH_URL`)
 
 > [!IMPORTANT]
 > `wrangler.jsonc` is the source of truth for the deploy. AI may pull `account_id` from a stale env variable or guess it from a previous project — always cross-check against `wrangler whoami` output. Putting sensitive values in `vars` is a common mistake because `vars` and secrets look similar; `vars` are visible in the dashboard while secrets are encrypted at rest. If something feels like a credential, treat it as a secret.
+>
+> Also: `vars` only holds **server-side** runtime config. Don't put `NEXT_PUBLIC_*` variables here expecting them to reach the browser — Next.js bakes `NEXT_PUBLIC_*` into the client bundle at **build time**, so they must exist when the build runs, not be added afterward via `vars`.
 
 ---
 
@@ -186,13 +205,13 @@ If anything fails in `cf:preview`, it will fail in production too. Fix it now, b
 
 #### Checkpoint 5 — Pre-flight validation via dry-run
 
-**What AI does:** Runs `npx wrangler deploy --dry-run --outdir dist`. This simulates the full deploy process — building the package, validating the config, checking account permissions, resolving routes and DNS — but stops short of actually pushing to Cloudflare. AI then runs `du -sh dist/` to show the final bundle size.
+**What AI does:** Runs `npx wrangler deploy --dry-run --outdir dist`. This simulates the full deploy process — building the package, validating the config, checking account permissions, resolving routes and DNS — but stops short of actually pushing to Cloudflare. AI then reads the size line wrangler prints (e.g. `Total Upload: 8570.03 KiB / gzip: 1617.01 KiB`) — the **gzip** number is the bundle size that matters.
 
 **What you verify:**
 - Dry-run completes with **no errors or warnings**
 - Output shows the correct account name and your custom domain
 - No route conflicts reported (subdomain isn't already claimed by another Worker)
-- Bundle size is within plan limits:
+- Bundle size is within plan limits — compare the **gzip** figure (not the uncompressed size) against:
   - **Free plan:** 3 MiB ceiling — bundle larger than this requires upgrading to Paid
   - **Paid plan:** 10 MiB ceiling (Anduin is on Paid)
 - For best cold-start performance, aim for under 2 MiB even on Paid
@@ -216,7 +235,7 @@ If anything fails in `cf:preview`, it will fail in production too. Fix it now, b
 - Runs `npm run cf:deploy` (which calls `wrangler deploy` under the hood). Your app becomes live at your custom subdomain.
 - Pipes secrets from `.env.local` to Cloudflare in batch — using a shell loop that reads each `KEY=value` line, pipes the value through stdin to `npx wrangler secret put KEY`. All secrets upload in one command, **without prompts and without exposing values in the terminal or chat**.
 - Runs `npx wrangler secret list` to confirm all secrets are set.
-- **Disables the default `*.workers.dev` URLs** that Cloudflare auto-creates for every Worker. AI does this via wrangler API or by guiding you through dashboard toggles — but it may happen silently. **Always verify yourself (see below).**
+- **Disables the default `*.workers.dev` URLs** that Cloudflare auto-creates for every Worker. This happens declaratively via the `workers_dev: false` and `preview_urls: false` fields set in `wrangler.jsonc` back in Checkpoint 3 — they take effect on deploy. **Always verify yourself (see below)** that they actually went Inactive.
 
 **What you verify:**
 
@@ -239,10 +258,16 @@ If anything fails in `cf:preview`, it will fail in production too. Fix it now, b
 > 
 > **If AI asks you to paste a secret value into chat** (instead of using the pipe), that's a setup bug — abort and have AI redo this checkpoint using the batch approach. Secrets pasted into chat are considered compromised and must be rotated.
 
+> [!TIP]
+> A few `.env.local` formatting gotchas the batch pipe handles, so you don't get a secret that "looks set" but is silently wrong:
+> - **Windows line endings (CRLF).** If you created `.env.local` on Windows, each value can carry a hidden `\r` that breaks auth in confusing ways. The pipe strips it.
+> - **Quoted values** like `KEY="value"` would upload the quotes too. The pipe strips one surrounding layer.
+> - **Multi-line secrets** (e.g. a `FIREBASE_PRIVATE_KEY` PEM block) can't be read line-by-line. Set those one manually with `npx wrangler secret put KEY` (it prompts you), or store them on a single line with `\n` escapes. Tell AI if you have one.
+
 > [!IMPORTANT]
 > **The `*.workers.dev` URLs bypass your Zero Trust gate.** Cloudflare auto-creates two default URLs for every Worker on `*.workers.dev` — the Worker URL and Preview URLs. These are **not** behind Anduin Zero Trust — anyone on the Internet who discovers the URL can reach your app and any data it exposes, bypassing company SSO entirely.
 >
-> AI usually disables these as part of the deploy flow, but it may do so silently without telling you. **Always check the dashboard yourself after every deploy.** The custom domain you set up via `wrangler.jsonc` is the only URL that should remain active for internal apps.
+> AI disables these declaratively through the `workers_dev: false` / `preview_urls: false` fields in `wrangler.jsonc`, so a clean deploy should leave them Inactive — but **always check the dashboard yourself after every deploy.** If either is still Active, confirm both fields are present in `wrangler.jsonc`, redeploy, and if it still persists, toggle them off manually in the dashboard. The custom domain you set up via `wrangler.jsonc` is the only URL that should remain active for internal apps.
 
 ---
 
@@ -285,7 +310,7 @@ These rules apply regardless of what AI suggests, what the docs say, or how conv
 
 3. **Never deploy a company app to a personal Cloudflare account.** Even if it technically works. Personal accounts mean the app leaves when you leave the company, admins can't monitor or take over, and billing ends up on personal cards.
 
-4. **Always verify `*.workers.dev` URLs are disabled after every deploy.** AI usually handles this, but silently. Open the Cloudflare dashboard → your Worker → Settings, and confirm both Worker URL and Preview URLs show `Inactive`. Until they are, your app is reachable from the public Internet bypassing the Zero Trust gate.
+4. **Always verify `*.workers.dev` URLs are disabled after every deploy.** The `workers_dev: false` / `preview_urls: false` fields in `wrangler.jsonc` should keep them off, but verify anyway. Open the Cloudflare dashboard → your Worker → Settings, and confirm both Worker URL and Preview URLs show `Inactive`. Until they are, your app is reachable from the public Internet bypassing the Zero Trust gate.
 
 5. **Sync secrets across all platforms when rotating.** If you rotate `SUPABASE_ANON_KEY` in Supabase but forget to update it in the Worker, the app breaks. If you rotate it in the Worker but forget Supabase, the old key still works elsewhere and isn't actually rotated. Rotation must happen everywhere the secret lives, in the same change.
 
