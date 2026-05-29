@@ -1,6 +1,6 @@
 # Deploy Next.js to Cloudflare Workers (Anduin)
 
-For human-readable explanation of every step (why, what to verify, common pitfalls), see [\[Human\] Cloudflare Workers Deployment Playbook](https://github.com/anduintransact/your-repo/blob/main/PLAYBOOK.md).
+For human-readable explanation of every step (why, what to verify, common pitfalls), see [\[Human\] Cloudflare Workers Deployment Playbook](https://github.com/AI-Hivemind-Lab/instructions/blob/main/%5Bhuman%5D_cloudflare_workers_deployment_playbook.md).
 
 ## Scope and assumptions
 
