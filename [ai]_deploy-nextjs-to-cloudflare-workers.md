@@ -35,15 +35,25 @@ Run `npx wrangler whoami`.
 
 ### 4. Dependency audit
 
-Read `package.json`. Search for Node-only libraries that fail on Workers:
+Read `package.json`. Sort findings into THREE buckets — they are not all the same severity:
+
+**Bucket A — Native / Node-only libs (hard blockers).** These rely on native binaries or filesystem APIs Workers doesn't have:
 
 - `sharp`, `puppeteer`, `playwright`, `bcrypt`, `canvas`, `pdf-parse`
-- `pg`, `prisma`, `drizzle-orm`, `mysql2`, `mongodb` (raw DB clients)
+
+**Bucket B — ORMs (investigate, do NOT auto-block).** These CAN run on Workers when paired with an HTTP/serverless driver, so their mere presence is not a blocker:
+
+- `prisma`, `drizzle-orm`
+
+**Bucket C — Raw TCP database drivers (hard blockers).** These open raw TCP sockets to a DB, which Workers can't do:
+
+- `pg`, `postgres`, `mysql2`, `mongodb`
 
 Also grep source files for `postgresql://`, `postgres://`, `mysql://` connection strings.
 
-- If any Node-only library found → STOP. Tell user: "Found [lib]. This won't run on Workers. Options: (a) replace with a Workers-compatible alternative, (b) deploy to Dokploy instead. Which do you want?" Wait for decision.
-- If `postgresql://` (or similar) found in code → STOP. Tell user: "Found direct database connection string. Workers doesn't support raw TCP to databases. Migrate to Supabase REST API or similar HTTPS-based access. Or deploy to Dokploy instead."
+- If a **Bucket A** lib found → STOP. Tell user: "Found [lib]. This needs a native runtime and won't run on Workers. Options: (a) replace with a Workers-compatible alternative, (b) move that work to a Supabase Edge Function, (c) deploy to Dokploy instead. Which do you want?" Wait for decision.
+- If a **Bucket B** ORM found → do NOT stop. Ask: "Found [orm]. This works on Workers only with an HTTP/serverless driver (e.g. Supabase REST, Neon serverless, Prisma Accelerate, D1) — not with a raw `pg`/`mysql2` driver. Which driver does this app use?" Continue only once the driver is confirmed HTTP-based. If it turns out to use a raw TCP driver or `postgresql://` string, treat as Bucket C.
+- If a **Bucket C** driver OR a `postgresql://`/`mysql://` connection string found → STOP. Tell user: "Found a direct database connection. Workers doesn't support raw TCP to databases. Migrate to HTTPS-based access (Supabase REST API / Edge Functions, Firebase) or deploy to Dokploy instead."
 
 ### 5. Secrets readiness
 
@@ -65,6 +75,17 @@ Ask user to confirm both:
 If user says no to either → tell them to resolve (contact InfoSec for domain; see Notion VPN setup link for client) and ABORT.
 
 ## Deploy steps
+
+> Numbering note: the human-facing playbook groups the deploy into **6 Checkpoints**. When narrating progress to the user, announce the matching checkpoint name so they can follow along in their doc:
+>
+> | This file | Human playbook checkpoint |
+> |---|---|
+> | Pre-flight Step 3 (Cloudflare account) | Checkpoint 1 — Verify your Cloudflare account |
+> | Step 1 (install adapter + configs) | Checkpoint 2 — Install adapter & update `.gitignore` |
+> | Step 2 (`wrangler.jsonc`) | Checkpoint 3 — Write the deploy config |
+> | Step 3 (local preview) | Checkpoint 4 — Pre-deploy sanity check (`cf:preview`) |
+> | Step 4 (dry-run) | Checkpoint 5 — Pre-flight validation (dry-run) |
+> | Step 5 + Step 6 (deploy, secrets, verify URLs) | Checkpoint 6 — Real deploy & set secrets |
 
 ### Step 1: Install adapter and update configs
 
@@ -104,28 +125,40 @@ Create `wrangler.jsonc` at project root:
 
 ```jsonc
 {
+  "$schema": "node_modules/wrangler/config-schema.json",
   "name": "<app-name>",
   "main": ".open-next/worker.js",
   "compatibility_date": "<today YYYY-MM-DD>",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
   "account_id": "<from wrangler whoami>",
+  "assets": { "directory": ".open-next/assets", "binding": "ASSETS" },
   "workers_dev": false,
   "preview_urls": false,
   "routes": [
     { "pattern": "<user-confirmed-subdomain>", "custom_domain": true }
   ],
-  "vars": {}
+  "vars": {},
+  "observability": { "enabled": true }
 }
 ```
 
 Field meanings:
 - `<app-name>`: derive from `package.json` `name` field
+- `compatibility_date`: today's date. MUST be `2024-09-23` or later or `@opennextjs/cloudflare` will fail at runtime. (Some runtime APIs like `FinalizationRegistry` need `2025-05-05` or later — today's date is always safe.)
+- `compatibility_flags`: **REQUIRED.** `nodejs_compat` enables the Node.js APIs that the OpenNext adapter depends on — without it the Worker errors at runtime. `global_fetch_strictly_public` makes the app's outbound `fetch()` calls go to the public Internet instead of being intercepted by same-zone routing; recommended for proxy-style apps that call external APIs (Supabase, AI providers). Drop `global_fetch_strictly_public` only if the app makes no outbound HTTPS calls.
 - `<account_id>`: extract from `wrangler whoami` output
-- `<user-confirmed-subdomain>`: from pre-flight Step 6
+- `assets`: **REQUIRED.** Tells Workers where OpenNext put the static frontend files (`.open-next/assets`) and binds them as `ASSETS`. Without this, CSS/JS/images won't be served and the app renders blank.
 - `workers_dev: false`: disables the auto-generated `*.workers.dev` URL (bypasses Zero Trust gate if left enabled)
 - `preview_urls: false`: disables Preview URLs on `*.workers.dev` (same reason)
-- `vars`: leave empty unless user explicitly provides non-sensitive config
+- `<user-confirmed-subdomain>`: from pre-flight Step 6
+- `vars`: leave empty unless user explicitly provides non-sensitive **server-side** config (see note below)
+- `observability: { enabled: true }`: turns on Worker logs/metrics from day one. Cheap and worth it.
+
+NOTE on `vars`: only server-side runtime config belongs here (e.g. `NEXTAUTH_URL`, `AUTH_TRUST_HOST`, feature flags). Do NOT put `NEXT_PUBLIC_*` variables here expecting them to reach the browser — Next.js inlines `NEXT_PUBLIC_*` at **build time**, so they must be present when `opennextjs-cloudflare build` runs, not added afterward via `vars`.
 
 DO NOT put any secrets in `vars`. Secrets go through Step 5.
+
+> Reference: this is the same config shape as real deployed Anduin Workers (e.g. HiveFin uses exactly these `compatibility_flags`, `assets` binding, and `observability` block — plus `NEXTAUTH_URL` / `AUTH_TRUST_HOST` in `vars`).
 
 ### Step 3: Local preview
 
@@ -148,7 +181,13 @@ Run:
 npx wrangler deploy --dry-run --outdir dist
 ```
 
-Then `du -sh dist/`.
+Read the size line wrangler prints, which looks like:
+
+```
+Total Upload: 8570.03 KiB / gzip: 1617.01 KiB
+```
+
+The **`gzip:` figure is the one that counts** — Cloudflare enforces Worker size limits on the compressed size, not the uncompressed bundle. Do NOT use `du -sh dist/`: that measures the uncompressed bundle and will overstate the size 2–4×, causing false ABORTs.
 
 Check output for:
 
@@ -156,7 +195,7 @@ Check output for:
 - Account name matches Anduin master
 - Custom domain in output matches user-confirmed subdomain
 - Route conflicts → ABORT, the subdomain is taken
-- Bundle size:
+- Bundle size (the **gzip** number):
   - Under 3 MiB → OK on both Free and Paid
   - 3 MiB to 10 MiB → OK on Paid (Anduin is on Paid)
   - Over 10 MiB → ABORT, tell user to audit dependencies. Common culprit: beta/RC versions (e.g. `next-auth@5.0.0-beta.*`) — suggest downgrade to stable.
@@ -168,13 +207,22 @@ Run `npm run cf:deploy`. Expect output ending with `Current Version ID: <id>`. N
 Then pipe secrets from `.env.local` to Cloudflare in batch:
 
 ```bash
-while IFS='=' read -r key value; do
-  [[ -z "$key" || "$key" =~ ^# ]] && continue
-  echo "$value" | npx wrangler secret put "$key"
+while IFS='=' read -r key value || [[ -n "$key" ]]; do
+  [[ -z "$key" || "$key" =~ ^[[:space:]]*# ]] && continue
+  value="${value%$'\r'}"                      # strip trailing CR (Windows/CRLF files)
+  value="${value#\"}"; value="${value%\"}"    # strip one layer of surrounding double quotes
+  printf '%s' "$value" | npx wrangler secret put "$key"
 done < .env.local
 ```
 
-This reads each `KEY=value` line, pipes value via stdin. AI never sees the values. DO NOT prompt the user to paste individual secret values into chat.
+This reads each `KEY=value` line and pipes the value via stdin. AI never sees the values. DO NOT prompt the user to paste individual secret values into chat.
+
+Why the extra lines (they prevent silent secret corruption):
+- `|| [[ -n "$key" ]]` — also processes the **last line** even if the file has no trailing newline (otherwise the last secret is silently skipped).
+- `${value%$'\r'}` — strips the carriage return that Windows/CRLF files add, which would otherwise be uploaded as a hidden character inside the secret and cause auth failures that are very hard to debug.
+- quote-stripping — handles `.env.local` lines written as `KEY="value"`, which would otherwise upload the literal quotes.
+
+CAVEAT — multi-line secrets: this loop is line-based, so it cannot handle values that span multiple lines (e.g. a PEM private key like `FIREBASE_PRIVATE_KEY`). If `.env.local` contains a multi-line value, set that one manually with `npx wrangler secret put <KEY>` (which prompts for the value) and skip it in the loop, OR ensure it's stored on a single line with literal `\n` escapes.
 
 Verify by running `npx wrangler secret list`. Confirm count and names match keys in `.env.local`.
 
